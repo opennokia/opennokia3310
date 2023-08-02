@@ -1,2 +1,2 @@
 # software
-Full software for the OpenNokia
+Full software for the OpenNokia3310
