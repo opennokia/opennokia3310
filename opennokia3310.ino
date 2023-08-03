@@ -5,6 +5,8 @@
 #include "bitmaps.h"
 #include "ringtones.h"
 #include "time.h"
+#include "nokia4pt7b.h"
+#include <Fonts/Picopixel.h>
 
 // Serial definitions
 #define SerialMon Serial
@@ -24,6 +26,8 @@
 // Pins for buttons and speaker
 #define SELECT_BTN_PIN 22
 #define UP_BTN_PIN 21
+#define DOWN_BTN_PIN 25
+#define DELETE_BTN_PIN 26
 #define SPEAKER_PIN 19
 
 // LCD and GSM module setup
@@ -40,16 +44,20 @@ Adafruit_PCD8544 display(LCD_SCLK, LCD_DIN, LCD_DC, LCD_CS, LCD_RST);
 TinyGsm modem(SerialAT);
 int currentScreen = 0;
 int currentMenuPage = 1;
+int currentApp = 0;
 int animProgress = 0;
 bool isTextBoxActive = false;
 bool isGSMAvailible = true;
 bool isGSMAsleep = false;
 uint8_t wifiConnectTries = 0;
+const char compile_date[] = __DATE__ " " __TIME__;
 
 void setup() {
   pinMode(SELECT_BTN_PIN, INPUT_PULLUP);
   pinMode(UP_BTN_PIN, INPUT_PULLUP);
-  tone(SPEAKER_PIN, 2000, 50);
+  pinMode(DOWN_BTN_PIN, INPUT_PULLUP);
+  pinMode(DELETE_BTN_PIN, INPUT_PULLUP);
+  tone(SPEAKER_PIN, 400, 100);
 
   Serial.begin(115200);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -68,9 +76,10 @@ void setup() {
   // Initialize the display
   SerialAT.begin(115200);
   display.begin();
-  display.setContrast(60);
+  display.setContrast(63); // 60
   display.setBias(4);
   display.setRotation(2);
+  display.setFont(&nokia4pt7b);
   display.setTextSize(1);
   display.setTextColor(1);
 
@@ -83,10 +92,10 @@ void setup() {
   }
 
   // Display the startup message
-  display.setCursor(0, 0);
   display.clearDisplay();
-  display.println("OpenNokia3310");
-  display.setCursor(36, 0);
+  display.setCursor(0, 6);
+  display.println("ONPinit");
+  display.setCursor(45, 6);
   display.println(getFormattedTime());
 
   // Check GSM module availability and put it to sleep if available
@@ -105,15 +114,35 @@ void setup() {
     }
   }
 
-  // Fetch and display the current time on the home screen
-  display.setCursor(12, 0);
-  display.clearDisplay();
-  display.println("OpenNokia3310");
-  display.setCursor(36, 0);
-  display.println(getFormattedTime());
-
   // Set modem sleep and WiFi sleep
   // setModemSleep();
+}
+
+void drawSelectButton(char* text = "Select") {
+  // int16_t tmpX = display.getCursorX();
+  // int16_t tmpY = display.getCursorY();
+
+  // if (text == "Menu") int width = 42 - 13 // custom rules because i can't deal with variable length fonts :joy:
+
+  display.setCursor(42 - (strlen(text) * 6) / 2, 47);
+  display.println(text);
+
+  // display.setCursor(tmpX, tmpY)
+}
+
+void drawCurrentMenuPageNumber() {
+  // int16_t tmpX = display.getCursorX();
+  // int16_t tmpY = display.getCursorY();
+
+  display.setCursor(76, 6);
+  display.println(currentMenuPage);
+
+  // display.setCursor(tmpX, tmpY)
+}
+
+unsigned long previousMillis = 0;
+bool nonBlockingDelay(unsigned long delayTime) {
+  return (millis() - previousMillis >= delayTime) ? (previousMillis = millis(), true) : false;
 }
 
 void drawHomeScreen() {
@@ -182,48 +211,16 @@ void drawHomeScreen() {
   //display.drawBitmap(13, 8,  bitmap, 4, 8, 1);
 
   // menu "button"
-  display.setCursor(30, 40);
-  display.println("Menu");
+  drawSelectButton("Menu");
 
   // ntp time
-  display.setCursor(12, 0);
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo))
-    display.println("UNKNOWN TIME");
-  else {
-    display.setCursor(36, 0);
-    display.println(&timeinfo, "%H:%M:%S");
-  }
+  display.setCursor(45, 6);
+  display.println(getFormattedTime());
 
   // CPU frequency
-  display.setCursor(48, 10);
+  display.setCursor(48, 16);
   display.print(getCpuFrequencyMhz());
   display.println("MHz");
-}
-
-void drawSelectButton(char* text = "Select") {
-  // int16_t tmpX = display.getCursorX();
-  // int16_t tmpY = display.getCursorY();
-
-  display.setCursor(62 - (strlen(text) * 6), 40);
-  display.println(text);
-
-  // display.setCursor(tmpX, tmpY)
-}
-
-void drawCurrentMenuPageNumber() {
-  // int16_t tmpX = display.getCursorX();
-  // int16_t tmpY = display.getCursorY();
-
-  display.setCursor(76, 0);
-  display.println(currentMenuPage);
-
-  // display.setCursor(tmpX, tmpY)
-}
-
-unsigned long previousMillis = 0;
-bool nonBlockingDelay(unsigned long delayTime) {
-  return (millis() - previousMillis >= delayTime) ? (previousMillis = millis(), true) : false;
 }
 
 void drawMenuScreen(int bitmapIndex, int frames, char* titleText, char* selectBtnText = "Select") {
@@ -231,7 +228,7 @@ void drawMenuScreen(int bitmapIndex, int frames, char* titleText, char* selectBt
   if (bitmapIndex > 0)
     display.drawBitmap(10, 20, bitmaps[bitmapIndex + animProgress], 64, 14, 1);
 
-  display.setCursor(62 - (strlen(titleText) * 6), 10);
+  display.setCursor(70 - (strlen(titleText) * 6), 16);
   display.println(titleText);
   drawCurrentMenuPageNumber();
   drawSelectButton(selectBtnText);
@@ -263,6 +260,96 @@ void drawMenu() {
   }
 }
 
+void sysInfoApp() {
+  display.setFont(&Picopixel);
+
+  display.setCursor(0, 4);
+  display.println("OpenNokiaProject");
+  display.println(compile_date);
+
+  if (isGSMAvailible) {
+    display.print("GSM info: ");
+    display.println(modem.getModemInfo());
+    if (isGSMAsleep) 
+      display.println("GSM is sleeping");
+    else {
+      display.print("GSM signal quality: ");
+      display.println(modem.getSignalQuality());
+    }
+  }
+  
+  display.print("WiFi sleep status: ");
+  display.println(WiFi.getSleep());
+
+  display.print("WiFi SSID: ");
+  display.println(WiFi.SSID());
+
+  display.print("WiFi IP: ");
+  display.println(WiFi.localIP());
+
+  display.setFont(&nokia4pt7b); // reset font to default
+}
+
+void sysTestApp() {
+  display.setCursor(0, 0);
+  display.println("SysTest");
+}
+
+void settingsApp() {
+  display.setCursor(0, 0);
+  display.println("Settings");
+}
+
+typedef void (*FunctionPointer)();
+FunctionPointer AppList[] = { sysInfoApp, sysTestApp, settingsApp };
+
+void drawApp() {
+  AppList[currentApp]();
+}
+
+void handleButtonPress(uint16_t button) {
+  if (currentScreen > 2) // should never happen I guess
+    currentScreen = 0; // go home
+
+  switch(button) {
+    case 0: // Select
+      switch(currentScreen) {
+        case 0: // if we're on the home screen
+          currentScreen = 1; // go to menu
+          break;
+        case 1: // if we're in the menu
+          currentScreen = 2; // change screen to app
+          currentApp = currentMenuPage - 1; // set app function
+          return;
+          break;
+        case 2: // if we're in an app
+          // handleInAppSelect();
+          currentScreen = 0; // the delete button isn't there yet...
+          break;
+      }
+      break;
+    
+    case 1: // UP
+      if (currentScreen == 1) currentMenuPage++;
+      break;
+
+    case 2: // DOWN
+      if (currentScreen == 1) currentMenuPage--;
+      break;
+
+    case 3: // Delete
+      if (currentScreen == 1) currentScreen == 0;
+      if (currentScreen == 2 && !isTextBoxActive) currentScreen == 1;
+      // TODO rest
+      break;
+    
+    default:
+      break;
+  }
+
+  return;
+}
+
 void setModemSleep() {
   WiFi.disconnect(true);
   WiFi.setSleep(true);
@@ -282,53 +369,10 @@ void wakeModemSleep() {
   }
 }
 
-void handleButtonPress(uint16_t button) {
-  if (currentScreen > 2) // should never happen I guess
-    currentScreen = 0; // go home
-
-  switch(button) {
-    case 0: // Select
-      switch(currentScreen) {
-        case 0: // if we're on the home screen
-          currentScreen = 1; // go to menu
-          break;
-        case 1: // if we're in the menu
-          // handleAppOpen(currentMenuPage); // open selected app
-          currentScreen = 0; // though the apps aren't there yet, so go home
-          return;
-          break;
-        case 2: // if we're in an app
-          // handleInAppSelect();
-          currentScreen = 0; // the apps aren't there yet...
-          break;
-      }
-      break;
-    
-    case 1: // UP
-      if (currentScreen == 1) currentMenuPage++;
-      break;
-
-    case 2: // DOWN
-      if (currentScreen == 1) currentMenuPage--;
-      break;
-
-    case 3: // Remove
-      if (currentScreen == 1) currentScreen == 0;
-      if (currentScreen == 2 && !isTextBoxActive) currentScreen == 1;
-      // TODO rest
-      break;
-    
-    default:
-      break;
-  }
-
-  return;
-}
-
 String getFormattedTime() {
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
-    return "UNKNOWN TIME";
+    return "UNK_TIME";
   } else {
     char buffer[9];
     strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeinfo);
@@ -337,27 +381,42 @@ String getFormattedTime() {
 }
 
 void loop() {
-  if (!digitalRead(22)) { // LOW because of internal pullup resistor
+  if (!digitalRead(SELECT_BTN_PIN)) { // LOW because of internal pullup resistor
     if (nonBlockingDelay(250))
       handleButtonPress(0);
   }
 
-  if (!digitalRead(21)) { // same as above
+  if (!digitalRead(UP_BTN_PIN)) { // same as above
     if (nonBlockingDelay(250))
       handleButtonPress(1);
   }
 
+  // uncomment when buttons added
+  /*if (!digitalRead(DOWN_BTN_PIN)) {
+    if (nonBlockingDelay(250))
+      handleButtonPress(2);
+  }
+
+  //if (!digitalRead(DELETE_BTN_PIN)) {
+    if (nonBlockingDelay(250))
+      handleButtonPress(3);
+  }*/
+
   display.clearDisplay();
 
   switch (currentScreen) {
-    case 0:
+    case 0: // home screen
       drawHomeScreen();
       break;
-    case 1:
+    case 1: // menu
       drawMenu();
+      break;
+    case 2: // app
+      drawApp();
       break;
     default:
       break;
   }
+
   display.display();
 }
