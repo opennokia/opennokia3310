@@ -7,14 +7,7 @@
 #include "time.h"
 #include "nokia4pt7b.h"
 #include <Fonts/Picopixel.h>
-
-// Serial definitions
-#define SerialMon Serial
-#define SerialAT Serial2
-
-// Required definition for TinyGSM
-#define TINY_GSM_MODEM_SIM800
-#include <TinyGSM.h>
+#include "SIM800L.h"
 
 // Constants for WiFi and NTP
 #define WIFI_SSID "TP-LINK_E924"
@@ -23,12 +16,16 @@
 #define UTC_OFFSET 7200
 #define UTC_OFFSET_DST 0
 
-// Pins for buttons and speaker
+// Pins and ID's for the buttons, buzzer and speaker
 #define SELECT_BTN_PIN 22
+#define SELECT_BTN 0
 #define UP_BTN_PIN 21
+#define UP_BTN 1
 #define DOWN_BTN_PIN 25
+#define DOWN_BTN 2
 #define DELETE_BTN_PIN 26
-#define SPEAKER_PIN 19
+#define DELETE_BTN 3
+#define BUZZER_PIN 19
 
 // LCD and GSM module setup
 #define LCD_SCLK 18
@@ -41,23 +38,25 @@
 
 // Objects and variables
 Adafruit_PCD8544 display(LCD_SCLK, LCD_DIN, LCD_DC, LCD_CS, LCD_RST);
-TinyGsm modem(SerialAT);
+GSM gsm(Serial2);
 int currentScreen = 0;
 int currentMenuPage = 1;
 int currentApp = 0;
 int animProgress = 0;
 bool isTextBoxActive = false;
-bool isGSMAvailible = true;
-bool isGSMAsleep = false;
 uint8_t wifiConnectTries = 0;
 const char compile_date[] = __DATE__ " " __TIME__;
+
+#define homeScreen 0
+#define menuScreen 1
+#define activeAppS 2
 
 void setup() {
   pinMode(SELECT_BTN_PIN, INPUT_PULLUP);
   pinMode(UP_BTN_PIN, INPUT_PULLUP);
   pinMode(DOWN_BTN_PIN, INPUT_PULLUP);
   pinMode(DELETE_BTN_PIN, INPUT_PULLUP);
-  tone(SPEAKER_PIN, 400, 100);
+  tone(BUZZER_PIN, 400, 100);
 
   Serial.begin(115200);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -73,10 +72,11 @@ void setup() {
   }
   configTime(UTC_OFFSET, UTC_OFFSET_DST, NTP_SERVER);
 
+  Serial2.begin(115200);
+
   // Initialize the display
-  SerialAT.begin(115200);
   display.begin();
-  display.setContrast(63); // 60
+  display.setContrast(60);
   display.setBias(4);
   display.setRotation(2);
   display.setFont(&nokia4pt7b);
@@ -99,23 +99,10 @@ void setup() {
   display.println(getFormattedTime());
 
   // Check GSM module availability and put it to sleep if available
-  if (!modem.testAT(2000)) {
-    isGSMAvailible = false;
-    display.println("No GSM modem");
-    display.display();
-  } else {
-    display.println("Init. modem");
-    display.display();
-    modem.init();
-    display.println("Disable GSM");
-    display.display();
-    if (modem.setPhoneFunctionality(0)) {
-      isGSMAsleep = true;
-    }
-  }
-
-  // Set modem sleep and WiFi sleep
-  // setModemSleep();
+  if (gsm.ping())
+    gsm.begin();
+  
+  setCpuFrequencyMhz(80);
 }
 
 void drawSelectButton(char* text = "Select") {
@@ -150,9 +137,9 @@ void drawHomeScreen() {
   display.drawBitmap(0, 0, wallpaper, 84, 48, 1);
 
   // connectivity and battery icons
-  display.drawBitmap(0, 42, cell_icon, 5, 6, 1);
-  display.drawBitmap(6, 42, wifi_icon, 6, 6, 1);
-  display.drawBitmap(13, 42, battery_icon, 4, 6, 1);
+  display.drawBitmap(0,  42, cell_icon,      5, 6, 1);
+  display.drawBitmap(6,  42, wifi_icon,      6, 6, 1);
+  display.drawBitmap(13, 42, battery_icon,   4, 6, 1);
   display.drawBitmap(18, 42, bluetooth_icon, 5, 6, 1);
 
   // bluetooth cross icon
@@ -162,53 +149,66 @@ void drawHomeScreen() {
   // display.drawBitmap(18, 22, sleep_bitmap, 5, 19, 1);
 
   // wifi signal bars
-  if (WiFi.getSleep() != 2)
+  if (WiFi.getSleep() == 2)
     display.drawBitmap(6, 22, sleep_bitmap, 5, 19, 1);
   else {
-    int8_t wifiSignStrg = WiFi.RSSI();
-    if (wifiSignStrg < -90 || wifiSignStrg > 0)
+    int wifiSignalStrength = WiFi.RSSI();
+    if (wifiSignalStrength < -90 || wifiSignalStrength > 0)
       display.drawBitmap(6, 36, nosig_bitmap, 5, 5, 1);
     else {
-      if (wifiSignStrg > -80)
+      if (wifiSignalStrength > -80)
         display.drawBitmap(6, 35, bitmap, 2, 6, 1);
-      if (wifiSignStrg > -70)
+      if (wifiSignalStrength > -70)
         display.drawBitmap(6, 26, bitmap, 2, 8, 1);
-      if (wifiSignStrg > -55)
+      if (wifiSignalStrength > -55)
         display.drawBitmap(6, 17, bitmap, 3, 8, 1);
-      if (wifiSignStrg > -40)
+      if (wifiSignalStrength > -40)
         display.drawBitmap(6, 8, bitmap, 4, 8, 1);
     }
   }
 
   // cell signal bars
-  if (isGSMAvailible) {
-    if (isGSMAsleep)
+  if (gsm.ping()) {
+    if (gsm.getSleep() != 0)
       display.drawBitmap(0, 22, sleep_bitmap, 5, 19, 1);
     else {
-      int8_t cellSignStrg = modem.getSignalQuality();
+      int8_t cellSignStrg = gsm.getCsq();
       if (cellSignStrg == 0 || cellSignStrg > 40)
         display.drawBitmap(0, 36, nosig_bitmap, 5, 5, 1);
       else {
         if (cellSignStrg > 1)
-          display.drawBitmap(0, 35, bitmap, 2, 6, 1);  // extreme nesting LOL
+          display.drawBitmap(0, 35, bitmap, 2, 6, 1);
         if (cellSignStrg > 10)
           display.drawBitmap(0, 26, bitmap, 2, 8, 1);
-        if (cellSignStrg > 14)
+        if (cellSignStrg > 15)
           display.drawBitmap(0, 17, bitmap, 3, 8, 1);
         if (cellSignStrg > 20)
           display.drawBitmap(0, 8, bitmap, 4, 8, 1);
       }
     }
-  } else {
+  } else
     display.drawBitmap(0, 36, nosig_bitmap, 5, 5, 1);
-  }
 
 
   // battery power
-  display.drawBitmap(13, 35, bitmap, 2, 6, 1);
-  display.drawBitmap(13, 26, bitmap, 2, 8, 1);
-  display.drawBitmap(13, 17, bitmap, 3, 8, 1);
-  //display.drawBitmap(13, 8,  bitmap, 4, 8, 1);
+  int batteryPercentage, voltage;
+  gsm.getBatteryData(batteryPercentage, voltage);
+  if (batteryPercentage > 90)
+    display.drawBitmap(13, 8,  bitmap, 3, 8, 1);
+  if (batteryPercentage > 70)
+    display.drawBitmap(13, 17, bitmap, 3, 8, 1);
+  if (batteryPercentage > 45)
+    display.drawBitmap(13, 26, bitmap, 2, 8, 1);
+  if (batteryPercentage > 10)
+    display.drawBitmap(13, 35, bitmap, 2, 6, 1);
+  if (batteryPercentage == 0)
+    display.drawBitmap(13, 36, nosig_bitmap, 5, 5, 1);
+  
+  if (voltage > 0) {
+    display.setCursor(0, 6);
+    display.print(voltage);
+    display.print("mV");
+  }
 
   // menu "button"
   drawSelectButton("Menu");
@@ -218,7 +218,7 @@ void drawHomeScreen() {
   display.println(getFormattedTime());
 
   // CPU frequency
-  display.setCursor(48, 16);
+  display.setCursor(47, 16);
   display.print(getCpuFrequencyMhz());
   display.println("MHz");
 }
@@ -267,14 +267,14 @@ void sysInfoApp() {
   display.println("OpenNokiaProject");
   display.println(compile_date);
 
-  if (isGSMAvailible) {
+  if (gsm.ping()) {
     display.print("GSM info: ");
-    display.println(modem.getModemInfo());
-    if (isGSMAsleep) 
+    display.println(gsm.getModuleInfo());
+    if (gsm.getSleep() != 0) 
       display.println("GSM is sleeping");
     else {
       display.print("GSM signal quality: ");
-      display.println(modem.getSignalQuality());
+      display.println(gsm.getCsq());
     }
   }
   
@@ -291,8 +291,18 @@ void sysInfoApp() {
 }
 
 void sysTestApp() {
-  display.setCursor(0, 0);
-  display.println("SysTest");
+  display.setFont(&Picopixel);
+
+  display.setCursor(0, 4);
+  display.println("ONP3310 SysTest");
+
+  if (gsm.ping()) {
+    display.print("SMS: ");
+    display.println(gsm.sendSMS("+48501501501", "Hello, world!") ? "Sent" : "Error"); // REMEMBER TO REMOVE YOUR PHONE NUMBER FROM HERE WHEN CONTRIBUTING 😂
+  }
+
+  display.setFont(&nokia4pt7b); // reset font to default
+  drawSelectButton("Home");
 }
 
 void settingsApp() {
@@ -308,38 +318,38 @@ void drawApp() {
 }
 
 void handleButtonPress(uint16_t button) {
-  if (currentScreen > 2) // should never happen I guess
-    currentScreen = 0; // go home
+  if (currentScreen > activeAppS) // should never happen I guess
+    currentScreen = homeScreen; // go home
 
   switch(button) {
     case 0: // Select
       switch(currentScreen) {
-        case 0: // if we're on the home screen
-          currentScreen = 1; // go to menu
+        case homeScreen: // if we're on the home screen
+          currentScreen = menuScreen; // go to menu
           break;
-        case 1: // if we're in the menu
-          currentScreen = 2; // change screen to app
-          currentApp = currentMenuPage - 1; // set app function
+        case menuScreen: // if we're in the menu
+          currentScreen = activeAppS; // change screen to app
+          currentApp = currentMenuPage - 1; // set currently active app ID
           return;
           break;
         case 2: // if we're in an app
           // handleInAppSelect();
-          currentScreen = 0; // the delete button isn't there yet...
+          currentScreen = homeScreen; // the delete button isn't there yet...
           break;
       }
       break;
     
     case 1: // UP
-      if (currentScreen == 1) currentMenuPage++;
+      if (currentScreen == menuScreen) currentMenuPage++;
       break;
 
     case 2: // DOWN
-      if (currentScreen == 1) currentMenuPage--;
+      if (currentScreen == menuScreen) currentMenuPage--;
       break;
 
     case 3: // Delete
-      if (currentScreen == 1) currentScreen == 0;
-      if (currentScreen == 2 && !isTextBoxActive) currentScreen == 1;
+      if (currentScreen == menuScreen) currentScreen == homeScreen;
+      if (currentScreen == activeAppS && !isTextBoxActive) currentScreen == menuScreen;
       // TODO rest
       break;
     
@@ -350,30 +360,11 @@ void handleButtonPress(uint16_t button) {
   return;
 }
 
-void setModemSleep() {
-  WiFi.disconnect(true);
-  WiFi.setSleep(true);
-  if (isGSMAvailible) {
-    if (modem.setPhoneFunctionality(0))
-      isGSMAsleep = true;
-  }
-  setCpuFrequencyMhz(10);
-}
-
-void wakeModemSleep() {
-  WiFi.setSleep(false);
-  setCpuFrequencyMhz(80);
-  if (isGSMAvailible) {
-    if (modem.setPhoneFunctionality(0))
-      isGSMAsleep = true;
-  }
-}
-
 String getFormattedTime() {
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
+  if (!getLocalTime(&timeinfo))
     return "UNK_TIME";
-  } else {
+  else {
     char buffer[9];
     strftime(buffer, sizeof(buffer), "%H:%M:%S", &timeinfo);
     return String(buffer);
@@ -383,35 +374,35 @@ String getFormattedTime() {
 void loop() {
   if (!digitalRead(SELECT_BTN_PIN)) { // LOW because of internal pullup resistor
     if (nonBlockingDelay(250))
-      handleButtonPress(0);
+      handleButtonPress(SELECT_BTN);
   }
 
   if (!digitalRead(UP_BTN_PIN)) { // same as above
     if (nonBlockingDelay(250))
-      handleButtonPress(1);
+      handleButtonPress(UP_BTN);
   }
 
   // uncomment when buttons added
   /*if (!digitalRead(DOWN_BTN_PIN)) {
     if (nonBlockingDelay(250))
-      handleButtonPress(2);
+      handleButtonPress(DOWN_BTN);
   }
 
   //if (!digitalRead(DELETE_BTN_PIN)) {
     if (nonBlockingDelay(250))
-      handleButtonPress(3);
-  }*/
+      handleButtonPress(DELETE_BTN);
+  } */
 
   display.clearDisplay();
 
   switch (currentScreen) {
-    case 0: // home screen
+    case homeScreen:
       drawHomeScreen();
       break;
-    case 1: // menu
+    case menuScreen:
       drawMenu();
       break;
-    case 2: // app
+    case activeAppS:
       drawApp();
       break;
     default:
